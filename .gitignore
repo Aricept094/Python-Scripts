@@ -1,0 +1,8 @@
+# Ignore everything
+*
+# Allow this .gitignore file
+!.gitignore
+
+# Allow Python (*.py) and Jupyter (*.ipynb) files
+!*.py
+!*.ipynb
