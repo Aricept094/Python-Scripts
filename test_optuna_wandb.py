@@ -1,60 +1,72 @@
+import os
+import time
+import random
+
+import ray
+from ray import tune
+from ray.tune.search.optuna import OptunaSearch
+
 import optuna
-import optunahub
-from optuna_integration.wandb import WeightsAndBiasesCallback
-import multiprocessing
-import wandb
+from optuna.storages import JournalStorage
+from optuna.storages.journal import JournalFileBackend
 
-# Define objective function (same)
-def objective(trial):
-    x = trial.suggest_float('x', -10, 10)
-    y = trial.suggest_categorical('y', ['linear', 'rbf', 'poly'])
-    z = trial.suggest_int('z', 1, 10)
-    score = (x - 2) ** 2 + (z-5)**2
-    if y == 'linear':
-        score += 1
-    elif y == 'rbf':
-        score += 2
-    else:
-        score += 3
-    trial.report(score, step=1) # Keep step=1
-    return score
 
-def run_optimization_process(wandbc_callback): # Pass the callback instance
-    module = optunahub.load_module(package="samplers/auto_sampler")
-    auto_sampler = module.AutoSampler()
+def train_fn(config):
+    """A dummy training function that reports a 'loss' metric."""
+    for i in range(10):
+        # Simulate some training: a loss function with noise.
+        loss = (config["a"] - 7.0) ** 2 + (config["b"] - 5e-4) ** 2 + random.random() * 0.1
+        # Report the loss (make sure to pass a dict to avoid keyword issues)
+        tune.report({"loss": loss})
+        time.sleep(0.1)
 
-    study = optuna.create_study(
-        study_name="autosampler-wandb-study5",
-        storage="sqlite:///example.db",
-        load_if_exists=True
+
+if __name__ == "__main__":
+    ray.init()
+
+    # Define the search space using Optuna distributions.
+    search_space = {
+        "a": optuna.distributions.FloatDistribution(6.0, 8.0),
+        "b": optuna.distributions.FloatDistribution(1e-4, 1e-2, log=True),
+    }
+
+    # Set up external persistent storage for Optuna.
+    storage_file_path = "/tmp/optuna_journal.log"
+    if os.path.exists(storage_file_path):
+        os.remove(storage_file_path)
+    storage = JournalStorage(JournalFileBackend(file_path=storage_file_path))
+
+    # Create the OptunaSearch object.
+    optuna_search = OptunaSearch(
+        space=search_space,
+        metric="loss",
+        mode="min",
+        storage=storage,
+        study_name="optuna_parallel_trial",
+    )
+    # Allow up to 4 concurrent trials at the searcher level.
+    optuna_search.set_max_concurrency(4)
+
+    # Wrap the training function to request 1 CPU per trial.
+    trainable_with_resources = tune.with_resources(train_fn, {"cpu": 1})
+
+    # Create the Tuner with TuneConfig that allows parallel trials.
+    tuner = tune.Tuner(
+        trainable_with_resources,
+        tune_config=tune.TuneConfig(
+            search_alg=optuna_search,
+            num_samples=20,              # Total number of trials.
+            max_concurrent_trials=4,     # Tune will schedule up to 4 concurrently.
+        ),
+        run_config=tune.RunConfig(
+            name="optuna_parallel_experiment",
+            storage_path="/tmp/tune_results",  # (Optional) for persistent experiment results.
+        ),
     )
 
-    study.optimize(
-        objective,
-        n_trials=10,  # Trials per process
-        callbacks=[wandbc_callback] # Use the passed callback
-    )
-    best_trial = study.best_trial
-    print(f"Process finished. Best trial value: {best_trial.value}")
-    print(f"Process finished. Best trial params: {best_trial.params}")
+    results = tuner.fit()
 
+    best_result = results.get_best_result(metric="loss", mode="min")
+    print("Best hyperparameter configuration found:", best_result.config)
 
-if __name__ == '__main__':
-    num_processes = 16
-
-    # Initialize WeightsAndBiasesCallback *ONCE* in the main process
-    wandb_kwargs = {"project": "optuna-autosampler-wandb-integration5"}
-    wandbc = WeightsAndBiasesCallback(metric_name='score', wandb_kwargs=wandb_kwargs, as_multirun=False) # Ensure as_multirun=False
-    wandb.define_metric("score", step_metric="score") # define metric here, use wandb.define_metric, not wandb.run.define_metric
-
-    processes = []
-    for _ in range(num_processes):
-        # Pass the same callback instance to each process
-        process = multiprocessing.Process(target=run_optimization_process, args=(wandbc,))
-        processes.append(process)
-        process.start() # Start the process
-
-    for process in processes:
-        process.join() # Wait for each process to finish
-
-    print("All optimization processes finished.")
+    ray.shutdown()
