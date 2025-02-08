@@ -32,21 +32,21 @@ if __name__ == "__main__":
     wandb.login()
     
     # Setup WandB callback with your project configuration
-    wandb_kwargs = {"project": "optuna-wandb-parallel-example51"}
+    wandb_kwargs = {"project": "wssw"}
     wandb_callback = WeightsAndBiasesCallback(wandb_kwargs=wandb_kwargs)
     
     # Create a callback to stop after 100 completed trials across all instances
-    terminate_callback = optuna.study.MaxTrialsCallback(n_trials=100, 
+    terminate_callback = optuna.study.MaxTrialsCallback(n_trials=500, 
                                                         states=(optuna.trial.TrialState.COMPLETE,))
     
     # Use a shared SQLite backend to allow multiple processes to work on the same study.
-    study = optuna.create_study(storage="sqlite:///demo51.db",
-                                study_name="demo51",
+    study = optuna.create_study(storage="sqlite:///wssw.db",
+                                study_name="wssw",
                                 load_if_exists=True,
                                 direction="minimize")
     
     # Run optimization: multiple instances can be launched concurrently.
-    study.optimize(train_random_forest, n_trials=100,
+    study.optimize(train_random_forest, n_trials=800,
                    callbacks=[terminate_callback, wandb_callback])
     
     best_trial = study.best_trial
